@@ -1,0 +1,564 @@
+---
+title: 'ISE 529 - Final'
+author: "Vaishnavi Guntupalli"
+date: "`r Sys.Date()`"
+output:
+  pdf_document: default
+  html_document: default
+urlcolor: blue
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+# The setup chunk is run automatically before any other code to make sure package requirements are satisfied
+# library(tidyverse)
+# library(ggplot2)
+# Add more packages here
+library(tidyr)
+library(rpart)
+library(tree)
+library(glmnet)
+library(splines)
+library(gam)
+library(stats)
+```
+
+```{r}
+set.seed(999)
+
+#Q1
+
+house_votes <- read.table("https://archive.ics.uci.edu/ml/machine-learning-databases/voting-records/house-votes-84.data", 
+           header=FALSE)
+
+#(a)
+class(house_votes) #check if the loaded data is a data frame
+
+#since it has all data in one column, split it using separate()
+house_votes_full <- separate(house_votes,1,c("class_name",
+                                             "handicapped",
+                                             "water",
+                                             "adoption",
+                                             "physician",
+                                             "el",
+                                             "religious",
+                                             "anti",
+                                             "aid",
+                                             "mx",
+                                             "immigration",
+                                             "synfuels",
+                                             "education",
+                                             "superfund",
+                                             "crime",
+                                             "duty",
+                                             "export"),sep=",")
+#getting to know the data
+head(house_votes_full)
+summary(house_votes_full)
+apply(house_votes_full,2,function(x) class(x))
+
+#treating the missing values with voting
+house_votes_full <- as.data.frame(apply(house_votes_full,2,function(x)
+  ifelse(x=="?",names(which(table(x) == max(table(x)[-1]))),x)))
+
+#converting the columns from character to factor
+house_votes_factors<-house_votes_full
+for(i in 1:ncol(house_votes_full))
+house_votes_factors[,i] <- as.factor(house_votes_full[,i])
+
+#divide the set into train and test
+#using 0.9 so that we have enough to train on and capture variance
+train <- sample(1:nrow(house_votes_factors),0.9*nrow(house_votes_factors),FALSE)
+house_votes_train <- house_votes_factors[train,]
+
+#(b)
+#built control with cp = 0 to have as many branches as possible
+#used 1000 cvs
+#used maximum depth possible
+rpart_pars <- rpart.control(20,6,0,4,5,2,1000,0,ncol(house_votes_factors))
+
+#built tree using the control
+rpart_house_votes <- rpart(class_name~.,house_votes_train,method="class",
+                           control=rpart_pars)
+summary(rpart_house_votes)
+plot(rpart_house_votes) #print tree
+text(rpart_house_votes,pretty=0)  #add labels
+#predict probabilities using test set
+probs_house_votes <- predict(rpart_house_votes,house_votes_factors[-train,-1])
+
+#classification using probabilities
+predicted_house_votes <- as.data.frame(house_votes_factors[-train,1])
+names(predicted_house_votes) <- c("actual")
+
+for(i in 1:nrow(probs_house_votes))
+{
+  predicted_house_votes[i,"predicted"] <- ifelse(probs_house_votes[i,1] > 0.5,"democrat","republican" )
+}
+
+#classification accuracy
+rpart_predicted_table <- table(predicted_house_votes[,1],predicted_house_votes[,2])
+(rpart_predicted_table[1,1]+rpart_predicted_table[2,2])/sum(rpart_predicted_table)
+#test classification accuracy is 90%, which proves it captured the variance well
+(rpart_predicted_table[1,2]+rpart_predicted_table[2,1])/sum(rpart_predicted_table)
+#misclassification error is small
+
+#(c)
+#we prune using cost complexity method
+prune_house_votes <- prune.rpart(rpart_house_votes,0.01)
+prune_house_votes #pruned tree
+plot(prune_house_votes)
+text(prune_house_votes,pretty=0)
+
+#This tree is pruned to have only 1 split because of the cp of 0.01
+
+probs_prune_house_votes <- predict(prune_house_votes,house_votes_factors[-train,-1])
+
+#classification using probabilities
+predicted_house_votes <- as.data.frame(house_votes_factors[-train,1])
+names(predicted_house_votes) <- c("actual")
+
+for(i in 1:nrow(probs_prune_house_votes))
+{
+  predicted_house_votes[i,"predicted"] <- ifelse(probs_house_votes[i,1] > 0.5,"democrat","republican" )
+}
+
+#classification accuracy
+rpart_predicted_table <- table(predicted_house_votes[,1],predicted_house_votes[,2])
+(rpart_predicted_table[1,1]+rpart_predicted_table[2,2])/sum(rpart_predicted_table)
+#test classification accuracy is 90%, which proves it captured the variance well
+(rpart_predicted_table[1,2]+rpart_predicted_table[2,1])/sum(rpart_predicted_table)
+#mis classification error is same as above
+
+#(d)
+house_votes_factors_new <- data.frame("n","n","n","y","y","y","y","n","n","y",
+                             "n","y","n","y","n","n")
+names(house_votes_factors_new) <- names(house_votes_factors)[-1]
+
+new_predict_1 <- predict(rpart_house_votes,house_votes_factors_new)
+new_predicted_1 <- ifelse(new_predict_1[,1] > 0.5,"democrat","republican")
+new_predicted_1 #predicted using unpruned tree
+new_predicted_2 <- predict(prune_house_votes,house_votes_factors_new)
+new_predicted_2 <- ifelse(new_predict_1[,1] > 0.5,"democrat","republican")
+new_predicted_2 #predicted using pruned tree
+
+##########################################################################################
+
+
+## Q2
+
+abalone <- as.vector(read.table("https://archive.ics.uci.edu/ml/machine-learning-databases/abalone/abalone.data",
+                          header=FALSE))
+
+#(a)
+#splitting teh data into different columns
+abalone_full <- separate(abalone,1,c("sex",
+                                     "Length",
+                                     "Diameter",
+                                     "Height",
+                                     "Whole_weight",
+                                     "Shucked_weight",
+                                     "Viscera_weight",
+                                     "Shell_weight",
+                                     "Rings"),sep=",")
+#explore the data
+class(abalone_full)
+head(abalone_full)
+summary(abalone_full)
+#converting to factor
+abalone_full[,1] <- as.factor(abalone_full[,1])
+#converting to numerical
+abalone_full[,-1]<- as.data.frame(apply(abalone_full[,-1],2,function(x) as.double(x)))
+
+#train test split
+split_sample <- sample(1:4177,3133,replace=FALSE) #random split
+abalone_train <- abalone_full[split_sample,]
+abalone_test_x <- abalone_full[-split_sample,-9]
+
+#(b)
+#explore the spread of Rings
+hist(abalone_full$Rings)
+#explore correlation and covariance between the variables
+data_correlation <- cor(abalone_full[,-1])
+data_covariance <- cov(abalone_full[,-1])
+plot(abalone_full$Rings,abalone_full$sex)
+#look at pairwise scatter plots of Y with strongly correlated ones
+pairs(abalone_full[,c(5,8,9)])
+#pairwise plot of all variables
+pairs(abalone_full)
+
+#(c)
+abalone_lm_fit <-lm(Rings~sex+Length+Diameter+Height+Whole_weight, data=abalone_train) 
+summary(abalone_lm_fit)
+
+abalone_lm_predict <- predict(abalone_lm_fit,abalone_train[,-9])
+
+#explain ability of our model
+TSS = sum((abalone_train[,9]-mean(abalone_train[,9]))^2)
+RSS = sum((abalone_lm_predict-abalone_train[,9])^2)
+(TSS-RSS)/TSS
+
+abalone_lm_fit <-lm(Rings~sex+Length+Diameter+Height, data=abalone_train) 
+summary(abalone_lm_fit)
+
+abalone_lm_predict <- predict(abalone_lm_fit,abalone_train[,-9])
+
+#explain ability of our model
+TSS = sum((abalone_train[,9]-mean(abalone_train[,9]))^2)
+RSS = sum((abalone_lm_predict-abalone_train[,9])^2)
+(TSS-RSS)/TSS
+
+#(d)
+#fit using all 8 predictors
+abalone_lm_fit_all <- lm(Rings~.,data=abalone_train)
+summary(abalone_lm_fit_all)
+
+abalone_lm_predict_all <- predict(abalone_lm_fit_all,abalone_train[,-9])
+
+TSS = sum((abalone_train[,9]-mean(abalone_train[,9]))^2)
+RSS = sum((abalone_lm_predict_all-abalone_train[,9])^2)
+RSS
+(TSS-RSS)/TSS
+#Low explainability but higher than previous.
+
+abalone_lm_fit_all <- lm(Rings~sex+Diameter+Height+Whole_weight+Shucked_weight
+                         +Viscera_weight+Shell_weight,data=abalone_train)
+summary(abalone_lm_fit_all)
+
+abalone_lm_predict_all <- predict(abalone_lm_fit_all,abalone_train[,-9])
+
+TSS = sum((abalone_train[,9]-mean(abalone_train[,9]))^2)
+RSS = sum((abalone_lm_predict_all-abalone_train[,9])^2)
+(TSS-RSS)/TSS
+
+#(e)
+#5 predictors##############
+abalone_quad_5 <- lm(Rings~poly(Diameter,2)+poly(Length,2)+poly(Height,2)
+                     +poly(Whole_weight,2)+I(sex=="I"), data=abalone_train)
+summary(abalone_quad_5)
+abalone_quad_5_predict <- predict(abalone_quad_5,abalone_train)
+
+TSS = sum((abalone_train[,9]-mean(abalone_train[,9]))^2)
+RSS = sum((abalone_quad_5_predict-abalone_train[,9])^2)
+RSS
+(TSS-RSS)/TSS
+
+#8 predictors##############
+abalone_quad_8 <- lm(Rings~poly(Length,2)+
+                     poly(Diameter,2)+
+                       poly(Height)+
+                       poly(Whole_weight,2)+
+                       poly(Shucked_weight,2)+
+                       poly(Viscera_weight,2)+
+                       poly(Shell_weight,2)+sex, data=abalone_train)
+summary(abalone_quad_8)
+abalone_quad_8_predict <- predict(abalone_quad_8,abalone_train)
+
+TSS = sum((abalone_train[,9]-mean(abalone_train[,9]))^2)
+RSS = sum((abalone_quad_8_predict-abalone_train[,9])^2)
+RSS
+(TSS-RSS)/TSS
+
+#(f)
+x=model.matrix(Rings~.,abalone_train) #convert 'sex' to dummy vars
+test_x <- model.matrix(Rings~.,abalone_full[-split_sample,])
+#ridge model with default parameters
+ridge_glmnet <- glmnet(x,abalone_train[,9],alpha=0) 
+#cv to fit best lambda
+cv_ridge <- cv.glmnet(x,abalone_train[,9],alpha=0,nfolds=4,standardize=TRUE)
+plot(cv_ridge)
+summary(cv_ridge)
+cv_ridge$lambda.min
+
+#(g)
+forward <- function(data)
+{
+  step = 1
+  model = "Rings ~ "
+  predictor = c()
+  variable = c(colnames(data)[-9],"poly(Length,2)","poly(Diameter,2)",
+               "poly(Height,2)","poly(Whole_weight,2)",
+               "poly(Shucked_weight,2)","poly(Viscera_weight,2)",
+               "poly(Shell_weight,2)")
+  while(TRUE)
+  {
+    p_value = c()
+    for(i in variable)
+    {
+      curmodel = paste0("Rings ~ ", paste(c(predictor,i),collapse = " + "))
+      fit = lm(curmodel, data = data)
+      p = summary(fit)$coefficients[,4][step+1]
+      p_value = c(p_value, p)
+    }
+    newPred = which.min(p_value)
+    if(p_value[newPred] <= 0.05)
+    {
+      predictor = c(predictor, variable[newPred])
+      model = paste0("Rings ~ ", paste(predictor,collapse = " + "))
+      variable = variable[-newPred]
+      # print step wise result
+      print(sprintf("=========Step %i: =========", step))
+      print("p_value of each element:")
+      print(p_value)
+      print(sprintf("Model in step %i: ", step))
+      print(model)
+      step = step + 1
+    }else break
+  }
+  # Show final results
+  print(sprintf("===== The final model is: %s =====", model))
+  final.fit = lm(model, data = data)
+  summary(final.fit)
+}
+
+forward(abalone_train)
+
+#(h)
+abalone_spline <- gam(Rings~s(Shell_weight,6)+s(Shucked_weight,6)+s(Diameter,6)
+                      +s(Whole_weight,6)+s(Height,6)+poly(Length,2)+
+                      poly(Length,2)+poly(Diameter,2)+
+                      poly(Whole_weight,2)+sex,
+                      abalone_train,family="gaussian")
+
+abalone_spline_predict <- predict(abalone_spline,abalone_train)
+
+TSS = sum((abalone_train[,9]-mean(abalone_train[,9]))^2)
+RSS = sum((abalone_spline_predict-abalone_train[,9])^2)
+RSS
+(TSS-RSS)/TSS
+
+#(i)
+abalone_lm_predict <- predict(abalone_lm_fit,abalone_test_x)
+TSS = sum((abalone_train[,9]-mean(abalone_train[,9]))^2)
+RSS = sum((abalone_lm_predict-abalone_full[-split_sample,9])^2)
+(TSS-RSS)/TSS
+mean((abalone_lm_predict-abalone_full[-split_sample,9])^2)
+
+abalone_lm_predict_all <- predict(abalone_lm_fit_all,abalone_test_x)
+TSS = sum((abalone_train[,9]-mean(abalone_train[,9]))^2)
+RSS = sum((abalone_lm_predict_all-abalone_full[-split_sample,9])^2)
+(TSS-RSS)/TSS
+mean((abalone_lm_predict_all-abalone_full[-split_sample,9])^2)
+
+abalone_quad_5_predict <- predict(abalone_quad_5,abalone_test_x)
+TSS = sum((abalone_train[,9]-mean(abalone_train[,9]))^2)
+RSS = sum((abalone_quad_5_predict-abalone_full[-split_sample,9])^2)
+(TSS-RSS)/TSS
+mean((abalone_quad_5_predict-abalone_full[-split_sample,9])^2)
+
+abalone_quad_8_predict <- predict(abalone_quad_8,abalone_test_x)
+TSS = sum((abalone_train[,9]-mean(abalone_train[,9]))^2)
+RSS = sum((abalone_quad_8_predict-abalone_full[-split_sample,9])^2)
+(TSS-RSS)/TSS
+mean((abalone_quad_8_predict-abalone_full[-split_sample,9])^2)
+
+
+cv_ridge_predict <- predict(ridge_glmnet,s=cv_ridge$lambda.min,test_x)
+mean((cv_ridge_predict-abalone_full[-split_sample,9])^2)
+
+#abalone_forward_predict <- predict(abalone_forward_predict,abalone_test_x)
+#TSS = sum((abalone_train[,9]-mean(abalone_train[,9]))^2)
+#RSS = sum((abalone_forward_predict-abalone_full[-split_sample,9])^2)
+#(TSS-RSS)/TSS
+#mean((abalone_forward_predict-abalone_full[-split_sample,9])^2)
+
+abalone_spline_predict <- predict(abalone_spline,abalone_test_x)
+TSS = sum((abalone_train[,9]-mean(abalone_train[,9]))^2)
+RSS = sum((abalone_spline_predict-abalone_full[-split_sample,9])^2)
+(TSS-RSS)/TSS
+mean((abalone_spline_predict-abalone_full[-split_sample,9])^2)
+
+#Q3
+set.seed(999)
+X1 <- rnorm(20,20,5)
+plot(X1)
+X2 <- rnorm(20,0.1)
+plot(X2)
+X3 <- rbeta(20,50,5)
+plot(X3)
+#Y <- (X2+X3)^2+X1+X3+10
+Y <- X1*200 + X2/X3 + X3^2
+#Y <- X1*200 + X2/X3 + X3^2
+plot(X1,Y)
+plot(X2,Y)
+plot(X3,Y)
+lm__fit <- lm(Y~X1+X2+X3)
+summary(lm__fit)
+lm_fit_1 <- lm(Y~X1)
+summary(lm_fit_1)
+lm_fit_2 <- lm(Y~X2)
+summary(lm_fit_2)
+lm_fit_3 <- lm(Y~X3)
+summary(lm_fit_3)
+
+X4 <- rnorm(20,20,5)
+plot(X4)
+X5 <- X4*rnorm(20,0,1)
+plot(X5)
+X6 <- 7*X4+100
+plot(X6)
+Y2 <- X4*X5*X6
+plot(Y2,X4)
+plot(Y2,X5)
+plot(Y2,X6)
+lm_Y2 <- lm(Y2~X4+X5+X6)
+summary(lm_Y2)
+lm_X4 <- lm(Y2~X4)
+summary(lm_X4)
+lm_X5 <- lm(Y2~X5)
+summary(lm_X5)
+lm_X6 <- lm(Y2~X6)
+summary(lm_X6)
+
+
+```
+## Include commented exam work
+
+
+## Q1(b)
+##in the summary of teh tree output, we can see all the split variables along 
+##with next important variables.
+
+## interpreting the tree
+## The tree output proves that the most important variable was physician. 
+##That explains the first split. If a candidate is not physician,
+##the vote goes to democrat but when a canditate is physician, further 
+## splits are required. If the candidate is a physician and not synfuels, the
+## vote goes to republic. In case of synfuels with no education, 
+## the vote is for democrat. Otherwise, republican.
+
+##Q1(c)
+##comparing both trees
+## From the pruned tree we notice that only one split remains thats because
+## of the cp factor we added. The splits in the previous tree were not 
+## decreasing the lack of fit by this factor. But since we set factor to 0,
+## the whole tree was given as output. 
+## Hence it means that having those additional splits was not contributing 
+## to the explainability significantly.
+## This is evident from the same test misclassification error.
+
+##Q1(d)
+## both the trees are used to predict and both predict the same (republican)
+
+## For unpruned tree, we notice that the tree requires the input not
+## to be a physician for "democrat" vote. But our input is a physician and also
+## the new candidiate is synfuels and educated. Hence vote goes to "republican"
+
+## For Pruned tree, since our new candidate is a physician, it classifies
+## as "republican"
+
+## #################################### end Q1#################################
+
+##Q2(b)
+## the data is explored graphically
+## the spread of the output variable is explored
+## looks like normal distribution approximately
+## covarainace and correlation matrix are explored to look at the relationship between 
+## the variables.
+## Look at the scatter plots of all predictor variables with output.
+## For readability, lets see the ones that are strongly correlated
+## Some variables seem to be strongly correlated to the output variable
+## Look at the plot of such variables with Y
+## We can intuitively say that these variables will contribute to the 
+## explainability of the output varaibles more than others.
+
+##Q2(c)
+## Here we built a model using only the train set and also only the first 5
+## variables.
+## The nominal variable does not need any special care as dummy variables are 
+##created by lm() automatically.
+## the first model has all 5 variables and the second model doesn't have 
+## Whole_weight included as it was not significant from the first model.
+##From teh output, we see that abalone being M or not is not significant.
+## Being I is significant by factor of -1.11 and F by intercept 4.28
+## For both these, we have calculated the TSS,RSS and proportion explained
+## The explainability of the model is only 37% which is pretty low.
+## HeNce, better models are required.
+
+##Q2(d)
+## Here we built a model using only the train set and all 8 variables. 
+## the first model has all 8 variables and the second model doesn't have 
+## Length included as it was not significant from the first model.
+## For both these, we have calculated the TSS,RSS and proportion explained
+## The explainability of the model is only 53% which higher than previous model
+## This means all 8 variables are important for the model.
+## However, better models are required.
+
+##Q2(e)
+## Here we fit a quadratic model to the data using 5 variables. 
+## But the variable 'sex' cannot be quadratic. Hence, we either use sex directly.
+## I have created a variable using I() dor sex==I because from previous 
+##we know that it is significant.
+## This model has a very low accuarcy. We can see that from the RSS
+## and explainability. It is much lower than previous models.
+##Hence, we need to add more variables or remove quadratic behaviour.
+
+##Next, we use all 8 predictors with quadratic regression
+## Here, we see that we have used 'sex' as is without any transformation
+## We see that the results are better than previous models
+## This proves that we need all the variables and that quadratic behaviour
+## is present in the data
+##RSS is much lower compared to the 5 variable model
+
+##Q2(f)
+## To fit a ridge regression we first have to use model.matrix()
+## to convert 'sex' to dummy vars
+## Next we have to divide the train data into 4 to parts, fit a ridge model
+## on 3 parts and test the selected lambda on teh 4th part. We have to also
+## capture the squared error while selecting the best lambda.
+## ALl this can be done by using cv.glmnet with alpha=0
+## First we fit a plain ridge with default parameters. 
+##This will help in final testing.
+## Next, fit a coross validated ridge with 4 folds.
+## The plot of this output shows us how squared error varies by lambda
+## fianlly we obtain the lambda for which the error is lowest.
+
+##Q2(g)
+## Here we are asked to use the stepwise model selection method to choose
+## the model. However, we are asked to use only 3133 points. So no test data
+## can be used.
+## We use the forward method because we saw previosuly that almost all varaibles 
+## to explain teh variability in this data.
+## We also add the squared predictor variables to see if they get selected
+##So forward selection will eleminate
+## only those that are not required.
+## From the resulst we see that the selected model is 
+##combination of linear and quadratic variable models.
+
+
+##Q2(h)
+## I added smooth splines and quadratic terms in teh model and 
+##it gives slightly better results compared to the other models.
+## I added quadratic terms because they were chosen to be the best 
+## in previous model selection
+## I chose smooth splines because just quadratic was not enough to capture data 
+## and the non linear behaviour is best explained by cubic splines
+## and they are continuous too
+
+##Q2(i)
+## Here we test all the models that we have built
+## we notice that the quadtratic with all variables is still the best model
+## we can see taht from the squared error and the explainability
+## Even in the test data we see that quadratic had  good performance too.
+## Thsi means that both the bias and the variance of this model is good
+## the division of test train captured teh variability well while having 
+## to test on.
+
+##Q3
+## To get a data set with no vars significant in regression but individually
+## significant with the response, all the variables must be highly correlated.
+## and teh response must be a linear combination of all variables
+## in that case together they will not have any explainability, but individually
+## they can explain the variance in reponse
+
+## for the opposite case,
+## all the variables must have no relationship to each other but the response 
+## should be a multiplicative combination of the variables
+## Tn this case no variable can individually be significant in explaining 
+##the variance in the data but together they will  be important and significant
+
+
+
+
+
+
+
